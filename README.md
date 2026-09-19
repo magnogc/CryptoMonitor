@@ -1,3 +1,41 @@
+# V4 Crypto Monitor v0.4
+
+## Novidades da v0.4
+
+- Painel com navegação direta para Macro e Sinais V4.
+- Regimes mensais (até 12 meses), critérios, quatro revisões semanais e gráficos de seis meses por moeda.
+- Carteiras reais nomeadas com UUID, fechamento de referência e diário de rebalanceamentos.
+- Comparação prospectiva da carteira real V4 com BTC/ETH, base 1, com cotização para neutralizar aportes/saques.
+- Persistência exclusivamente no GitHub privado, sem Supabase. Índice, carteira e histórico são gravados atomicamente; conflitos exigem recarregar.
+
+### Configuração da persistência
+
+O repositório `magnogc/CryptoMonitorData` deve permanecer privado e conter `index.json`, `portfolios/` e `history/`.
+No **Secrets do Streamlit**, configure os campos do exemplo `.streamlit/secrets.toml.example`.
+Use um token fine-grained limitado a CryptoMonitorData, com Contents: read/write e Metadata: read.
+Nunca cole o token em código, chat, URLs, logs ou commits. Alternativamente use a variável de ambiente `CRYPTOMONITOR_DATA_TOKEN` no servidor.
+Sem a credencial, apenas a tela Carteira real fica indisponível; o restante do monitor continua funcionando.
+
+O app compartilhado dá acesso às carteiras a todos os seus visitantes: UUID e nome distinguem registros, mas não isolam usuários. Restrinja o acesso ao app no provedor de hospedagem para uso privado.
+
+### Contabilidade e limites
+
+Registre quantidades e saldo USDT. Na entrada, o retorno começa em zero pelo fechamento disponível até a data escolhida (data efetiva da cotação fica registrada).
+Não importa PNL da corretora e não envia ordens. Rebalanceamentos registram posições antes/depois e aporte ou saque explícito; os valores precisam fechar aos preços de referência. Esta versão não modela taxas, slippage ou preços de execução.
+Cotações com mais de três dias de atraso são recusadas, e ausência de histórico gera aviso em vez de retorno inventado.
+Os gráficos exigem manter o cache desde a entrada; a rotina de mercado mantém o histórico cacheado.
+As quatro revisões são reconstruções com o universo/cache disponível, não comprovantes de execução ou snapshots históricos imutáveis.
+Os snapshots de sinais da v0.3 continuam locais; o diário de carteiras é persistido no repositório privado.
+
+### Preservação e testes
+
+A v0.3.2 integral está em `archive/v0.3.2`, commit `da48f243c9ca8e7d1ab64f3e770dd904df85f187`. O motor congelado e artefatos do backtest permanecem intactos.
+Execute `python -m compileall -q app.py config.py engine storage ui_v04.py` e `python -m pytest -q` (instale pytest além de requirements.txt).
+
+---
+
+## Documentação anterior (v0.3.2)
+
 # V4 Crypto Monitor — v0.3.1
 
 A v0.3.1 mantém o motor da v0.3 e torna a atualização de dados mais resiliente. A v0.3 transforma o dashboard em um **motor semanal com dados públicos atualizáveis**, mantendo o replay histórico da v0.2.

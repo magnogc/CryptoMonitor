@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from ui_v04 import navigate, render_diagnostics, render_portfolio
 from config import CONFIG
 from data.live_data import cache_status, update_crypto_only, update_sp500_for_config
 from engine.core import HistoricalV4Engine
@@ -70,6 +71,9 @@ def render_dashboard(result, live=False):
     with regime_col:
         st.markdown(f'<span class="status-chip {REGIME_CLASS[result.regime]}">{REGIME_LABEL[result.regime]}</span>',unsafe_allow_html=True)
 
+    if live:
+        st.button("Regime → Diagnóstico Macro", on_click=navigate, args=("Macro",))
+
     changes=sum(p.action!="Manter" for p in result.positions)
     m1,m2,m3,m4=st.columns(4)
     m1.metric("Regime",REGIME_LABEL[result.regime]);m2.metric("Alterações na Core",changes)
@@ -83,6 +87,8 @@ def render_dashboard(result, live=False):
         st.markdown('<div class="live-warning"><b>V4 Core ao vivo:</b> cálculo com dados públicos cacheados. O app apenas sugere pesos; não envia ordens para corretora.</div>',unsafe_allow_html=True)
 
     st.subheader("Carteira V4 Core")
+    if live:
+        st.button("Carteira V4 Core → Sinais V4", on_click=navigate, args=("Sinais V4",))
     render_positions(result)
     left,right=st.columns([1.15,1])
     with left:
@@ -114,10 +120,10 @@ def render_dashboard(result, live=False):
 
 hist=historical_engine()
 st.sidebar.title("V4 Crypto Monitor")
-engine_mode=st.sidebar.radio("Motor",["Ao vivo (v0.3.2)","Replay histórico"],index=0)
-view=st.sidebar.radio("Tela",["Painel semanal","Histórico","Diagnóstico","Dados"],index=0)
+engine_mode=st.sidebar.radio("Motor",["Ao vivo (v0.4)","Replay histórico"],index=0)
+view=st.sidebar.radio("Tela",["Painel semanal","Carteira real","Histórico","Diagnóstico","Dados"],index=0,key="view")
 
-if engine_mode=="Ao vivo (v0.3.2)":
+if engine_mode=="Ao vivo (v0.4)":
     status=cache_status(CONFIG)
     st.sidebar.divider();st.sidebar.caption("V4 Core = operacional · V4-O = monitoramento")
 
@@ -164,7 +170,7 @@ if engine_mode=="Ao vivo (v0.3.2)":
             st.sidebar.error(f"Falha na atualização do S&P 500: {exc}")
 
     if not status["ready"]:
-        st.title("V4 Crypto Monitor v0.3.2")
+        st.title("V4 Crypto Monitor v0.4")
         st.info("Use **Atualizar Binance** na barra lateral para a primeira carga. O S&P 500 já possui um bootstrap local e só precisa de atualização quando um novo sinal mensal exigir dados mais recentes.")
         st.stop()
 
@@ -194,35 +200,16 @@ if engine_mode=="Ao vivo (v0.3.2)":
             else: st.info("Ainda não há snapshots salvos.")
         else: st.info("Ainda não há snapshots salvos. No Painel semanal, use **Salvar snapshot desta revisão**.")
     elif view=="Diagnóstico":
-        st.title("Diagnóstico ao vivo")
-        diag=live.diagnostics(result.analysis_date)
-        t1,t2,t3=st.tabs(["Macro","Universo estrutural","Sinais V4"])
-        with t1:
-            mm=diag.macro
-            c1,c2,c3=st.columns(3);c1.metric("BTC 30d",f"{mm['btc_30d']:+.1%}");c2.metric("S&P 500 30d",f"{mm['sp500_30d']:+.1%}");c3.metric("BTC 90d",f"{mm['btc_90d']:+.1%}")
-            st.write("**Sinal mensal:**",mm["signal_date"].strftime('%d/%m/%Y'))
-            if mm.get("macro_stale"):
-                st.warning(f"S&P 500 externo indisponível para {mm['requested_signal_date'].strftime('%d/%m/%Y')}; regime mantido com a última referência válida de {mm['signal_date'].strftime('%d/%m/%Y')}.")
-            st.write("**Regime:**",REGIME_LABEL[diag.regime])
-        with t2:
-            u=diag.universe.copy()
-            if u.empty: st.info("Universo vazio.")
-            else:
-                u["solidity"]=u["solidity"].map(lambda x:f"{x:.3f}")
-                st.dataframe(u,hide_index=True,use_container_width=True)
-        with t3:
-            st.write("**Baseline mensal:**",", ".join(diag.baseline) if diag.baseline else "—")
-            st.write("**Candidato atual:**",", ".join(diag.candidates) if diag.candidates else "—")
-            st.write("**Confirmado:**",", ".join(diag.confirmed) if diag.confirmed else "—")
-            st.write("**Persistência do candidato:**",f"{diag.confirmation_count}x")
-            if not diag.signals.empty: st.dataframe(diag.signals,hide_index=True,use_container_width=True)
+        render_diagnostics(live, result)
+    elif view=="Carteira real":
+        render_portfolio(live, result)
     else:
         st.title("Dados e conectividade")
         st.write("**Binance:** mercado Spot público, candles diários e volume cotado em USDT.")
         st.write("**S&P 500:** cópia local com bootstrap; atualização mensal via FRED e fallback Stooq somente quando necessária.")
         st.write("**Cache local:**",str(CONFIG.cache_dir))
         st.json({k:(v.isoformat() if hasattr(v,'isoformat') else v) for k,v in cache_status(CONFIG).items()})
-        st.caption("Nenhuma chave de API é necessária nesta versão. O app não acessa saldo, conta nem envia ordens.")
+        st.caption("Dados de mercado não exigem chave. A persistência privada usa token configurado nos Secrets. O app não acessa saldo, conta nem envia ordens.")
 
 else:
     st.sidebar.divider();st.sidebar.success(f"Replay real: {hist.min_date.strftime('%d/%m/%Y')} a {hist.max_date.strftime('%d/%m/%Y')}")
@@ -236,7 +223,9 @@ else:
         fig.update_layout(height=430,yaxis_title="Capital acumulado (base 1,0)",margin=dict(l=0,r=0,t=30,b=0),legend=dict(orientation="h"));st.plotly_chart(fig,use_container_width=True)
         core=perf.iloc[-1].core_nav;shadow=perf.iloc[-1].shadow_nav
         c1,c2,c3=st.columns(3);c1.metric("V4 Core",f"{core:.2f}x");c2.metric("V4-O",f"{shadow:.2f}x");c3.metric("Diferença V4-O",f"{shadow/core-1:+.1%}")
+    elif view=="Carteira real":
+        st.info("Abra o motor Ao vivo para gerenciar a carteira real.")
     elif view=="Diagnóstico":
         st.title("Diagnóstico histórico");st.json({k:(v.isoformat() if hasattr(v,'isoformat') else v) for k,v in result.latest_event.items()})
     else:
-        st.title("Dados");st.info("No Replay histórico, os eventos e curvas são os artefatos congelados do backtest. Troque para **Ao vivo (v0.3.2)** para atualizar Binance/FRED.")
+        st.title("Dados");st.info("No Replay histórico, os eventos e curvas são os artefatos congelados do backtest. Troque para **Ao vivo (v0.4)** para atualizar Binance/FRED.")
