@@ -206,7 +206,7 @@ if engine_mode=="Ao vivo (v0.4)":
     else:
         st.title("Dados e conectividade")
         st.write("**Binance:** mercado Spot público, candles diários e volume cotado em USDT.")
-        st.write("**S&P 500:** cópia local com bootstrap; atualização mensal via FRED e fallback Stooq somente quando necessária.")
+        st.write("**S&P 500:** cópia local com bootstrap; atualização mensal via FRED, Yahoo Finance e fallback Stooq somente quando necessária.")
         st.write("**Cache local:**",str(CONFIG.cache_dir))
         st.json({k:(v.isoformat() if hasattr(v,'isoformat') else v) for k,v in cache_status(CONFIG).items()})
         st.caption("Dados de mercado não exigem chave. A persistência privada usa token configurado nos Secrets. O app não acessa saldo, conta nem envia ordens.")
