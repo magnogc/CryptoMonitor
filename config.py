@@ -23,6 +23,7 @@ class AppConfig:
     binance_base_url: str = "https://data-api.binance.vision"
     binance_fallback_url: str = "https://api.binance.com"
     fred_csv_url: str = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500"
+    yahoo_chart_url: str = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
     stooq_csv_url: str = "https://stooq.com/q/d/l/?s=%5Espx&i=d"
 
     # Bootstrap do universo vivo. O histórico diário cobre sinais e 12 meses de
