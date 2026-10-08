@@ -31,3 +31,24 @@ def test_seed_installs_when_cache_missing(tmp_path: Path):
     assert installed
     assert latest == date(2026,8,31)
     assert dest.exists()
+
+
+def test_seed_merges_newer_month_into_existing_cache(tmp_path: Path):
+    seed = tmp_path / "seed.csv"
+    dest = tmp_path / "cache" / "sp500.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "date": ["2026-07-31", "2026-08-31"],
+        "close": [7489.72, 7686.14],
+    }).to_csv(dest, index=False)
+    pd.DataFrame({
+        "date": ["2026-08-31", "2026-09-30"],
+        "close": [7686.14, 7651.54],
+    }).to_csv(seed, index=False)
+
+    latest, changed = ensure_sp500_seed(dest, seed)
+
+    assert changed
+    assert latest == date(2026, 9, 30)
+    merged = pd.read_csv(dest)
+    assert "2026-09-30" in set(merged["date"].astype(str))
