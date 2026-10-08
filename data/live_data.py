@@ -36,7 +36,7 @@ class BinancePublicClient:
         self.base_urls = [base_url.rstrip("/"), fallback_url.rstrip("/")]
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "V4-Crypto-Monitor/0.3.2"})
+        self.session.headers.update({"User-Agent": "V4-Crypto-Monitor/0.4"})
 
     def _get(self, path: str, params: dict | None = None):
         last_exc = None
@@ -257,20 +257,31 @@ def _sp500_cache_is_sufficient(destination: Path, reference_date: date | None = 
 
 
 def ensure_sp500_seed(destination: Path, seed_file: Path | None) -> tuple[date | None, bool]:
-    """Install the packaged bootstrap only when no local cache exists."""
-    if destination.exists():
-        _, latest = _read_sp500_cache(destination)
-        return latest, False
+    """Merge the packaged bootstrap into the local cache when it has newer observations.
+
+    This makes the app resilient when external providers are temporarily unavailable:
+    a newly shipped month-end observation is automatically incorporated even when an
+    older local cache already exists.
+    """
+    old, old_latest = _read_sp500_cache(destination)
     if seed_file is None or not seed_file.exists():
-        return None, False
-    destination.parent.mkdir(parents=True, exist_ok=True)
+        return old_latest, False
+
     seed = pd.read_csv(seed_file)
     seed["date"] = pd.to_datetime(seed["date"], errors="coerce")
     seed["close"] = pd.to_numeric(seed["close"], errors="coerce")
     seed = seed.dropna(subset=["date", "close"])[["date", "close"]].sort_values("date")
-    seed.to_csv(destination, index=False)
-    latest = None if seed.empty else seed["date"].max().date()
-    return latest, True
+    if seed.empty:
+        return old_latest, False
+
+    combined = seed if old.empty else pd.concat([old, seed], ignore_index=True)
+    combined = combined.drop_duplicates("date", keep="last").sort_values("date")
+    latest = combined["date"].max().date()
+    changed = old.empty or old_latest is None or latest > old_latest
+    if changed:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_csv(destination, index=False)
+    return latest, changed
 
 
 def _merge_sp500(destination: Path, incoming: pd.DataFrame) -> date:
@@ -298,7 +309,7 @@ def _download_fred(url: str, start: date, end: date, timeout: int) -> pd.DataFra
                   status_forcelist=(429, 500, 502, 503, 504),
                   allowed_methods=frozenset(["GET"]), raise_on_status=False)
     session.mount("https://", HTTPAdapter(max_retries=retry))
-    session.headers.update({"User-Agent": "V4-Crypto-Monitor/0.3.2"})
+    session.headers.update({"User-Agent": "V4-Crypto-Monitor/0.4"})
     r = session.get(request_url, timeout=(10, timeout))
     r.raise_for_status()
     from io import StringIO
@@ -308,10 +319,50 @@ def _download_fred(url: str, start: date, end: date, timeout: int) -> pd.DataFra
     return df.rename(columns={date_col: "date", value_col: "close"})[["date", "close"]]
 
 
+def _download_yahoo(url: str, start: date, end: date, timeout: int) -> pd.DataFrame:
+    """Download daily S&P 500 closes from Yahoo's chart endpoint (no API key)."""
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc) + timedelta(days=1)
+    params = {
+        "period1": int(start_dt.timestamp()),
+        "period2": int(end_dt.timestamp()),
+        "interval": "1d",
+        "events": "history",
+        "includeAdjustedClose": "true",
+    }
+    r = requests.get(
+        url,
+        params=params,
+        timeout=(10, timeout),
+        headers={"User-Agent": "Mozilla/5.0 V4-Crypto-Monitor/0.4"},
+    )
+    r.raise_for_status()
+    payload = r.json()
+    result = ((payload.get("chart") or {}).get("result") or [])
+    if not result:
+        error = ((payload.get("chart") or {}).get("error"))
+        raise RuntimeError(f"Yahoo respondeu sem série válida: {error}")
+    item = result[0]
+    timestamps = item.get("timestamp") or []
+    quote = (((item.get("indicators") or {}).get("quote") or [{}])[0])
+    closes = quote.get("close") or []
+    rows = []
+    for ts, close in zip(timestamps, closes):
+        if close is None:
+            continue
+        rows.append({
+            "date": datetime.fromtimestamp(ts, tz=timezone.utc).date(),
+            "close": close,
+        })
+    if not rows:
+        raise RuntimeError("Yahoo respondeu sem observações válidas do S&P 500.")
+    return pd.DataFrame(rows)
+
+
 def _download_stooq(url: str, start: date, end: date, timeout: int) -> pd.DataFrame:
     sep = "&" if "?" in url else "?"
     request_url = f"{url}{sep}d1={start.strftime('%Y%m%d')}&d2={end.strftime('%Y%m%d')}"
-    r = requests.get(request_url, timeout=(10, timeout), headers={"User-Agent": "Mozilla/5.0 V4-Crypto-Monitor/0.3.2"})
+    r = requests.get(request_url, timeout=(10, timeout), headers={"User-Agent": "Mozilla/5.0 V4-Crypto-Monitor/0.4"})
     r.raise_for_status()
     from io import StringIO
     df = pd.read_csv(StringIO(r.text))
@@ -328,9 +379,10 @@ def update_sp500_cache(
     force: bool = False,
     timeout: int = 30,
     fallback_url: str | None = None,
+    yahoo_url: str | None = None,
     seed_file: Path | None = None,
 ) -> tuple[date | None, bool, str]:
-    """Refresh the monthly S&P copy only when necessary, with FRED -> Stooq fallback."""
+    """Refresh the monthly S&P copy only when necessary, with FRED -> Yahoo -> Stooq fallback."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     reference_date = reference_date or datetime.now(timezone.utc).date()
     ensure_sp500_seed(destination, seed_file)
@@ -342,6 +394,8 @@ def update_sp500_cache(
     start = end - timedelta(days=120)
     errors = []
     sources = [("FRED", lambda: _download_fred(fred_url, start, end, timeout))]
+    if yahoo_url:
+        sources.append(("Yahoo Finance", lambda: _download_yahoo(yahoo_url, start, end, timeout)))
     if fallback_url:
         sources.append(("Stooq", lambda: _download_stooq(fallback_url, start, end, timeout)))
     for name, loader in sources:
@@ -373,6 +427,7 @@ def update_crypto_only(config, progress: Callable[[int, int, str], None] | None 
 def update_sp500_for_config(config, force: bool = False) -> tuple[date | None, bool, str]:
     return update_sp500_cache(config.fred_csv_url, config.sp500_cache_file,
         force=force, fallback_url=getattr(config, "stooq_csv_url", None),
+        yahoo_url=getattr(config, "yahoo_chart_url", None),
         seed_file=getattr(config, "sp500_seed_file", None))
 
 def update_all(config, progress: Callable[[int, int, str], None] | None = None) -> UpdateStats:
